@@ -1,4 +1,4 @@
-﻿import { kv } from "@vercel/kv";
+import { put } from "@vercel/blob";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -20,11 +20,16 @@ export default async function handler(req, res) {
     }
     
     const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-    
-    await kv.set(id, {
+    const payload = JSON.stringify({
       excelData,
       publishDate: publishDate || new Date().toLocaleDateString("zh-CN"),
       saveTime: new Date().toISOString()
+    });
+    
+    const blob = await put("workorder-" + id + ".json", payload, {
+      access: "public",
+      contentType: "application/json",
+      addRandomSuffix: false
     });
     
     const baseUrl = "https://" + req.get("host");

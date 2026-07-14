@@ -1,45 +1,66 @@
 import { put } from "@vercel/blob";
 
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  
+export default async function handler(req) {
   if (req.method === "OPTIONS") {
-    return res.status(200).end();
+    return new Response(null, {
+      status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type"
+      }
+    });
   }
-  
+
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "仅支持 POST" });
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { "Content-Type": "application/json" }
+    });
   }
-  
+
   try {
-    const { excelData, publishDate } = req.body;
+    const body = await req.json();
+    const { excelData, publishDate } = body;
+
     if (!excelData || !Array.isArray(excelData)) {
-      return res.status(400).json({ error: "无效数据" });
+      return new Response(JSON.stringify({ error: "Invalid data" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
     }
-    
+
     const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
     const payload = JSON.stringify({
       excelData,
       publishDate: publishDate || new Date().toLocaleDateString("zh-CN"),
       saveTime: new Date().toISOString()
     });
-    
+
     const blob = await put("workorder-" + id + ".json", payload, {
       access: "public",
       contentType: "application/json",
       addRandomSuffix: false
     });
-    
-    const baseUrl = "https://" + req.get("host");
-    res.json({
+
+    const host = req.headers.get("host") || "localhost";
+    const baseUrl = "https://" + host;
+
+    return new Response(JSON.stringify({
       success: true,
-      id,
+      id: id,
       shareUrl: baseUrl + "/share.html?id=" + id
+    }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
     });
   } catch (error) {
-    console.error("保存错误:", error);
-    res.status(500).json({ error: error.message });
+    return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" }
+    });
   }
 }

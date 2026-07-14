@@ -1,0 +1,259 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>每日工单简讯</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: DengXian, 等线, -apple-system, sans-serif; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+    .table-wrap { overflow: auto; max-height: 60vh; }
+    .modal-body { max-height: calc(90vh - 160px); overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+
+    const cleanField = (value) => {
+      if (value == null) return "";
+      return String(value).replace(/\r\n/g, " ").replace(/\n/g, " ").replace(/\r/g, " ").replace(/\s+/g, " ").trim();
+    };
+
+    function SharePage() {
+      const [excelData, setExcelData] = useState([]);
+      const [publishDate, setPublishDate] = useState("");
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const [showAISummary, setShowAISummary] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [searchKeyword, setSearchKeyword] = useState("");
+
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const id = params.get("id");
+        if (!id) {
+          setError("无效的链接");
+          setLoading(false);
+          return;
+        }
+        fetch("/api/data?id=" + id)
+          .then(res => {
+            if (!res.ok) throw new Error("数据不存在或已过期");
+            return res.json();
+          })
+          .then(data => {
+            setExcelData(data.excelData);
+            setPublishDate(data.publishDate);
+            setLoading(false);
+          })
+          .catch(err => {
+            setError(err.message);
+            setLoading(false);
+          });
+      }, []);
+
+      const focusOrders = useMemo(() => {
+        return excelData.filter(order => {
+          const biaoqian = order["工单标签"] || "";
+          const fenlei = order["核查问题类型"] || "";
+          return biaoqian.includes("重大风险") || biaoqian.includes("紧急问题") || fenlei === "疑似重大客户问题";
+        });
+      }, [excelData]);
+
+      const searchedOrders = useMemo(() => {
+        if (!searchKeyword.trim()) return focusOrders;
+        const kw = searchKeyword.toLowerCase();
+        return focusOrders.filter(order => {
+          const title = cleanField(order["工单总结"]).toLowerCase();
+          const orderNo = cleanField(order["工单号"]).toLowerCase();
+          const creator = cleanField(order["创建人"]).toLowerCase();
+          const duijieren = cleanField(order["工单对接人"]).toLowerCase();
+          const guanlianren = cleanField(order["相关人姓名"]).toLowerCase();
+          return title.includes(kw) || orderNo.includes(kw) || creator.includes(kw) || duijieren.includes(kw) || guanlianren.includes(kw);
+        });
+      }, [focusOrders, searchKeyword]);
+
+      const generateAISummary = (order) => {
+        const charen = cleanField(order["创建人"]) || "无";
+        const duijieren = cleanField(order["工单对接人"]) || "";
+        const guanlianren = cleanField(order["相关人姓名"]) || "";
+        const anli = "【工单对接人】" + charen + "," + duijieren + "    【关联人】" + guanlianren + "    【主诉问题】          【事宜澄清】          【问题根因&解决】          ";
+        return [
+          new Date().toLocaleDateString("zh-CN"),
+          cleanField(order["工单对接人"]) || "无",
+          "跟进中", "", "",
+          "【" + (cleanField(order["AI大分类"]) || "其他") + "】" + (cleanField(order["AI小分类"]) || ""),
+          (cleanField(order["工单总结"]) || "").replace(/【.*?】/g, ""),
+          anli,
+          cleanField(order["核查问题类型"]) || "无",
+          cleanField(order["工单标签"]) || "无",
+          cleanField(order["工单内容"]) || "无",
+          cleanField(order["工单链接"]) || "",
+          cleanField(order["工单号"]) || "",
+          cleanField(order["一级工单类型"]) || "无",
+          cleanField(order["二级工单类型"]) || "无",
+          cleanField(order["问题等级"]) || "无", "",
+          cleanField(order["客户名称"]) || "无",
+          cleanField(order["客户分类"]) || "无"
+        ];
+      };
+
+      const copyTSV = async () => {
+        if (!selectedOrder) return;
+        try {
+          const tsv = generateAISummary(selectedOrder).map(cleanField).join("\t").replace(/[\r\n]+/g, "");
+          await navigator.clipboard.writeText(tsv);
+          alert("已复制到剪贴板");
+        } catch {
+          alert("复制失败");
+        }
+      };
+
+      const OrderCard = ({ order }) => (
+        React.createElement("div", { className: "bg-white rounded-xl shadow-md p-4 hover:shadow-lg cursor-pointer border border-gray-100", onClick: () => setSelectedOrder(order) },
+          React.createElement("div", { className: "flex items-start justify-between gap-2 mb-2" },
+            React.createElement("h3", { className: "font-bold text-gray-800 line-clamp-2 flex-1" }, order["工单总结"] || "无标题"),
+            React.createElement("span", { className: "px-2 py-0.5 rounded text-white text-xs " + (order["AI大分类"] === "订单相关" ? "bg-blue-500" : order["AI大分类"] === "履约" ? "bg-green-500" : order["AI大分类"] === "客服" ? "bg-orange-500" : "bg-gray-500") },
+              order["AI大分类"] || "其他")
+          ),
+          React.createElement("div", { className: "text-sm text-gray-500 space-y-1" },
+            React.createElement("div", null, "工单号：" + (order["工单号"] || "无")),
+            React.createElement("div", null, "创建人：" + (order["创建人"] || "无")),
+            React.createElement("div", null, "工单对接人：" + (order["工单对接人"] || "无"))
+          )
+        )
+      );
+
+      if (loading) {
+        return React.createElement("div", { className: "min-h-screen flex items-center justify-center" },
+          React.createElement("div", { className: "text-center" },
+            React.createElement("div", { className: "text-6xl mb-4" }, "⏳"),
+            React.createElement("div", { className: "text-gray-600" }, "加载中...")
+          )
+        );
+      }
+
+      if (error) {
+        return React.createElement("div", { className: "min-h-screen flex items-center justify-center" },
+          React.createElement("div", { className: "text-center" },
+            React.createElement("div", { className: "text-6xl mb-4" }, "❌"),
+            React.createElement("div", { className: "text-xl text-gray-600 mb-2" }, "数据不存在或已过期"),
+            React.createElement("div", { className: "text-gray-400" }, "请联系数据发送者重新分享")
+          )
+        );
+      }
+
+      return (
+        React.createElement("div", { className: "min-h-screen bg-gray-50" },
+          React.createElement("div", { className: "max-w-7xl mx-auto p-6 space-y-8" },
+            React.createElement("div", { className: "text-center" },
+              React.createElement("h1", { className: "text-3xl font-bold text-gray-800 mb-2" }, "每日工单简讯 " + (publishDate || "")),
+              React.createElement("div", { className: "text-gray-500" },
+                "📊 工单总数：" + excelData.length + " 条",
+                "　　⭐ 重点关注：" + focusOrders.length + " 条"
+              )
+            ),
+            React.createElement("div", { className: "bg-white rounded-2xl shadow-lg p-6" },
+              React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                React.createElement("div", { className: "flex items-center gap-3" },
+                  React.createElement("span", { className: "text-2xl" }, "⭐"),
+                  React.createElement("h2", { className: "text-xl font-bold" }, "重点关注工单"),
+                  React.createElement("span", { className: "px-3 py-1 bg-orange-100 text-orange-600 rounded-full text-sm" }, searchedOrders.length + " 条")
+                )
+              ),
+              React.createElement("div", { className: "mb-4" },
+                React.createElement("input", { type: "text", className: "border rounded-lg px-4 py-2 w-full", placeholder: "搜索标题、工单号、创建人、工单对接人、关联人...", value: searchKeyword, onChange: e => setSearchKeyword(e.target.value) })
+              ),
+              searchedOrders.length === 0 ? 
+                React.createElement("div", { className: "text-center py-8 text-gray-400" }, "暂无重点关注工单") :
+                React.createElement("div", { className: "card-grid" },
+                  searchedOrders.map((order, i) => React.createElement(OrderCard, { key: i, order: order }))
+                )
+            ),
+            React.createElement("div", { className: "bg-white rounded-2xl shadow-lg p-6" },
+              React.createElement("div", { className: "flex items-center gap-3 mb-4" },
+                React.createElement("span", { className: "text-2xl" }, "📊"),
+                React.createElement("h2", { className: "text-xl font-bold" }, "所有工单汇总"),
+                React.createElement("span", { className: "px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-sm" }, excelData.length + " 条")
+              ),
+              React.createElement("div", { className: "table-wrap border rounded-xl" },
+                React.createElement("table", { className: "w-full bg-white text-sm" },
+                  React.createElement("thead", { className: "bg-gray-100 sticky top-0" },
+                    React.createElement("tr", null,
+                      ["工单总结","工单号","AI大分类","AI小分类","创建人","工单对接人","客户名称"].map((h, i) => 
+                        React.createElement("th", { key: i, className: "border px-4 py-3 text-left" }, h)
+                      )
+                    )
+                  ),
+                  React.createElement("tbody", null,
+                    excelData.map((order, i) => 
+                      React.createElement("tr", { key: i, className: "hover:bg-blue-50 cursor-pointer", onClick: () => setSelectedOrder(order) },
+                        ["工单总结","工单号","AI大分类","AI小分类","创建人","工单对接人","客户名称"].map((field, j) => 
+                          React.createElement("td", { key: j, className: "border px-4 py-2" }, cleanField(order[field]) || "-")
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          selectedOrder && 
+            React.createElement("div", { className: "fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50", onClick: () => setSelectedOrder(null) },
+              React.createElement("div", { className: "bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col", onClick: e => e.stopPropagation() },
+                React.createElement("div", { className: "flex items-center justify-between p-6 border-b" },
+                  React.createElement("h3", { className: "text-2xl font-bold" }, "工单详情"),
+                  React.createElement("button", { onClick: () => setSelectedOrder(null), className: "w-10 h-10 rounded-full hover:bg-gray-100" }, "✕")
+                ),
+                React.createElement("div", { className: "modal-body p-6" },
+                  React.createElement("div", { className: "space-y-4" },
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单总结"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["工单总结"] || "无")),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单内容"), React.createElement("div", { className: "bg-gray-50 p-3 rounded whitespace-pre-wrap" }, selectedOrder["工单内容"] || "无")),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单链接"), selectedOrder["工单链接"] ? React.createElement("a", { href: selectedOrder["工单链接"], target: "_blank", className: "text-blue-500 underline break-all" }, selectedOrder["工单链接"]) : React.createElement("span", { className: "text-gray-400" }, "无")),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-4" },
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "AI大分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["AI大分类"] || "无")),
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "AI小分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["AI小分类"] || "无"))
+                    ),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-4" },
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "创建人"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["创建人"] || "无")),
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单对接人"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["工单对接人"] || "无"))
+                    ),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "客户分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["客户分类"] || "无"))
+                  ),
+                  React.createElement("div", { className: "flex gap-3 mt-6" },
+                    React.createElement("button", { onClick: () => setShowAISummary(!showAISummary), className: "flex-1 px-6 py-3 rounded-xl " + (showAISummary ? "bg-blue-500 text-white" : "bg-gray-100") }, showAISummary ? "隐藏" : "显示", " AI总结"),
+                    React.createElement("button", { onClick: copyTSV, className: "flex-1 px-6 py-3 rounded-xl bg-green-500 text-white" }, "一键复制")
+                  ),
+                  showAISummary && React.createElement("div", { className: "mt-4" },
+                    React.createElement("div", { className: "table-wrap border rounded" },
+                      React.createElement("table", { className: "w-full bg-white text-xs" },
+                        React.createElement("thead", { className: "bg-gray-100" },
+                          React.createElement("tr", null,
+                            ["跟进日期","跟进人","跟进状态","跟进完成时间","问题场景分类","案例名称","案例跟踪分析与解决","问题类型","工单标签","工单内容","工单链接","工单号","工单一级类型","工单二级类型","工单星级","判责","客户名称","客户分类"].map((h, i) => React.createElement("th", { key: i, className: "border px-3 py-2" }, h))
+                          )
+                        ),
+                        React.createElement("tbody", null,
+                          React.createElement("tr", null,
+                            generateAISummary(selectedOrder).map((v, i) => React.createElement("td", { key: i, className: "border px-3 py-2" }, v))
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(SharePage));
+  </script>
+</body>
+</html>

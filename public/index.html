@@ -1,0 +1,358 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>每日工单简讯 - 管理后台</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: DengXian, 等线, -apple-system, sans-serif; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+    .table-wrap { overflow: auto; max-height: 60vh; }
+    .table-wrap table { min-width: 2000px; }
+    .modal-body { max-height: calc(90vh - 160px); overflow-y: auto; }
+    .filter-input { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 12px; width: 100%; }
+    .filter-input:focus { outline: none; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useCallback, useMemo } = React;
+
+    const cleanField = (value) => {
+      if (value == null) return "";
+      return String(value).replace(/\r\n/g, " ").replace(/\n/g, " ").replace(/\r/g, " ").replace(/\s+/g, " ").trim();
+    };
+
+    function App() {
+      const [excelData, setExcelData] = useState([]);
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const [showAISummary, setShowAISummary] = useState(false);
+      const [toast, setToast] = useState(null);
+      const [isLoading, setIsLoading] = useState(false);
+      const [searchKeyword, setSearchKeyword] = useState("");
+      const [filterColumns, setFilterColumns] = useState({});
+      const [shareUrl, setShareUrl] = useState("");
+      const [isSaved, setIsSaved] = useState(false);
+      const [errorMsg, setErrorMsg] = useState("");
+
+      const showToast = (message, type = "success") => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 3000);
+      };
+
+      const handleFileUpload = useCallback(async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const ext = file.name.split(".").pop().toLowerCase();
+        if (!["xlsx", "xls"].includes(ext)) {
+          showToast("请上传 Excel 文件", "error");
+          return;
+        }
+        setIsLoading(true);
+        try {
+          const data = await file.arrayBuffer();
+          const workbook = XLSX.read(data, { type: "array" });
+          const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+          setExcelData(jsonData);
+          setSelectedOrder(null);
+          setIsSaved(false);
+          setShareUrl("");
+          setErrorMsg("");
+          showToast("上传成功，共 " + jsonData.length + " 条工单");
+        } catch (err) {
+          showToast("解析失败", "error");
+        } finally {
+          setIsLoading(false);
+        }
+      }, []);
+
+      const handleSave = async () => {
+        if (excelData.length === 0) {
+          showToast("没有数据可保存", "error");
+          return;
+        }
+        setIsLoading(true);
+        setErrorMsg("");
+        try {
+          const date = new Date().toLocaleDateString("zh-CN");
+          const response = await fetch("/api/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ excelData, publishDate: date })
+          });
+          const result = await response.json();
+          if (result.success) {
+            setShareUrl(result.shareUrl);
+            setIsSaved(true);
+            showToast("保存成功！");
+          } else {
+            setErrorMsg(result.error || "保存失败");
+            showToast(result.error || "保存失败", "error");
+          }
+        } catch (err) {
+          setErrorMsg("网络错误: " + err.message);
+          showToast("保存失败: " + err.message, "error");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      const copyShareUrl = async () => {
+        if (!shareUrl) return;
+        try {
+          await navigator.clipboard.writeText(shareUrl);
+          showToast("链接已复制");
+        } catch {
+          showToast("复制失败", "error");
+        }
+      };
+
+      const downloadExcel = () => {
+        if (excelData.length === 0) {
+          showToast("没有数据可下载", "error");
+          return;
+        }
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "工单数据");
+        XLSX.writeFile(wb, "工单数据.xlsx");
+        showToast("下载成功");
+      };
+
+      const focusOrders = useMemo(() => {
+        return excelData.filter(order => {
+          const biaoqian = order["工单标签"] || "";
+          const fenlei = order["核查问题类型"] || "";
+          return biaoqian.includes("重大风险") || biaoqian.includes("紧急问题") || fenlei === "疑似重大客户问题";
+        });
+      }, [excelData]);
+
+      const searchedOrders = useMemo(() => {
+        if (!searchKeyword.trim()) return focusOrders;
+        const kw = searchKeyword.toLowerCase();
+        return focusOrders.filter(order => {
+          const title = cleanField(order["工单总结"]).toLowerCase();
+          const orderNo = cleanField(order["工单号"]).toLowerCase();
+          const creator = cleanField(order["创建人"]).toLowerCase();
+          const duijieren = cleanField(order["工单对接人"]).toLowerCase();
+          const guanlianren = cleanField(order["相关人姓名"]).toLowerCase();
+          return title.includes(kw) || orderNo.includes(kw) || creator.includes(kw) || duijieren.includes(kw) || guanlianren.includes(kw);
+        });
+      }, [focusOrders, searchKeyword]);
+
+      const filteredExcelData = useMemo(() => {
+        return excelData.filter(order => {
+          for (const col in filterColumns) {
+            if (filterColumns[col]) {
+              const val = cleanField(order[col] || "").toLowerCase();
+              const kw = filterColumns[col].toLowerCase();
+              if (!val.includes(kw)) return false;
+            }
+          }
+          return true;
+        });
+      }, [excelData, filterColumns]);
+
+      const generateAISummary = (order) => {
+        const charen = cleanField(order["创建人"]) || "无";
+        const duijieren = cleanField(order["工单对接人"]) || "";
+        const guanlianren = cleanField(order["相关人姓名"]) || "";
+        const anli = "【工单对接人】" + charen + "," + duijieren + "    【关联人】" + guanlianren + "    【主诉问题】          【事宜澄清】          【问题根因&解决】          ";
+        return [
+          new Date().toLocaleDateString("zh-CN"),
+          cleanField(order["工单对接人"]) || "无",
+          "跟进中", "", "",
+          "【" + (cleanField(order["AI大分类"]) || "其他") + "】" + (cleanField(order["AI小分类"]) || ""),
+          (cleanField(order["工单总结"]) || "").replace(/【.*?】/g, ""),
+          anli,
+          cleanField(order["核查问题类型"]) || "无",
+          cleanField(order["工单标签"]) || "无",
+          cleanField(order["工单内容"]) || "无",
+          cleanField(order["工单链接"]) || "",
+          cleanField(order["工单号"]) || "",
+          cleanField(order["一级工单类型"]) || "无",
+          cleanField(order["二级工单类型"]) || "无",
+          cleanField(order["问题等级"]) || "无", "",
+          cleanField(order["客户名称"]) || "无",
+          cleanField(order["客户分类"]) || "无"
+        ];
+      };
+
+      const copyTSV = async () => {
+        if (!selectedOrder) return;
+        try {
+          const tsv = generateAISummary(selectedOrder).map(cleanField).join("\t").replace(/[\r\n]+/g, "");
+          await navigator.clipboard.writeText(tsv);
+          showToast("已复制到剪贴板");
+        } catch {
+          showToast("复制失败", "error");
+        }
+      };
+
+      const allFields = ["工单对接人","核查问题类型","AI大分类","AI小分类","工单内容","工单总结","工单标签","工单链接","工单号","一级工单类型","二级工单类型","创建人","客户名称","相关人姓名","相关人一级部门","客户分类","问题等级"];
+      const fieldLabels = {
+        "工单对接人":"工单对接人","核查问题类型":"核查问题","AI大分类":"AI大分类","AI小分类":"AI小分类",
+        "工单内容":"工单内容","工单总结":"工单总结","工单标签":"工单标签","工单链接":"工单链接",
+        "工单号":"工单号","一级工单类型":"一级类型","二级工单类型":"二级类型",
+        "创建人":"创建人","客户名称":"客户名称","相关人姓名":"关联人",
+        "相关人一级部门":"关联人部门","客户分类":"客户分类","问题等级":"问题等级"
+      };
+
+      const OrderCard = ({ order }) => (
+        React.createElement("div", { className: "bg-white rounded-xl shadow-md p-4 hover:shadow-lg cursor-pointer border border-gray-100", onClick: () => setSelectedOrder(order) },
+          React.createElement("div", { className: "flex items-start justify-between gap-2 mb-2" },
+            React.createElement("h3", { className: "font-bold text-gray-800 line-clamp-2 flex-1" }, order["工单总结"] || "无标题"),
+            React.createElement("span", { className: "px-2 py-0.5 rounded text-white text-xs " + (order["AI大分类"] === "订单相关" ? "bg-blue-500" : order["AI大分类"] === "履约" ? "bg-green-500" : order["AI大分类"] === "客服" ? "bg-orange-500" : "bg-gray-500") },
+              order["AI大分类"] || "其他")
+          ),
+          React.createElement("div", { className: "text-sm text-gray-500 space-y-1" },
+            React.createElement("div", null, "工单号：" + (order["工单号"] || "无")),
+            React.createElement("div", null, "创建人：" + (order["创建人"] || "无")),
+            React.createElement("div", null, "工单对接人：" + (order["工单对接人"] || "无"))
+          )
+        )
+      );
+
+      return (
+        React.createElement("div", { className: "min-h-screen bg-gray-50" },
+          toast && React.createElement("div", { className: "fixed top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl shadow-lg text-white font-medium " + (toast.type === "error" ? "bg-red-500" : "bg-green-500") }, toast.message),
+          isLoading && React.createElement("div", { className: "fixed inset-0 bg-black/30 flex items-center justify-center z-50" }, React.createElement("div", { className: "bg-white px-6 py-4 rounded-xl shadow-lg" }, "处理中...")),
+          React.createElement("div", { className: "max-w-7xl mx-auto p-6 space-y-8" },
+            React.createElement("div", { className: "flex items-center justify-between flex-wrap gap-4" },
+              React.createElement("h1", { className: "text-3xl font-bold text-gray-800" }, "每日工单简讯 - 管理后台"),
+              React.createElement("div", { className: "flex gap-3 flex-wrap" },
+                React.createElement("label", { htmlFor: "file-upload", className: "cursor-pointer px-6 py-3 bg-blue-500 text-white rounded-xl hover:bg-blue-600 font-medium shadow-md" }, "上传 Excel"),
+                React.createElement("input", { type: "file", accept: ".xlsx,.xls", onChange: handleFileUpload, className: "hidden", id: "file-upload" }),
+                React.createElement("button", { onClick: downloadExcel, className: "px-6 py-3 bg-green-500 text-white rounded-xl hover:bg-green-600 font-medium shadow-md", disabled: excelData.length === 0 }, "下载 Excel"),
+                React.createElement("button", { onClick: handleSave, className: "px-6 py-3 bg-orange-500 text-white rounded-xl hover:bg-orange-600 font-medium shadow-md", disabled: excelData.length === 0 || isSaved }, isSaved ? "已保存" : "保存并分享")
+              )
+            ),
+            errorMsg && React.createElement("div", { className: "bg-red-50 border border-red-200 rounded-xl p-4 text-red-600" }, "错误: " + errorMsg),
+            shareUrl && React.createElement("div", { className: "bg-green-50 border border-green-200 rounded-xl p-4" },
+              React.createElement("div", { className: "flex items-center justify-between gap-4" },
+                React.createElement("div", { className: "flex-1" },
+                  React.createElement("div", { className: "text-green-600 mb-1" }, "✅ 分享链接已生成"),
+                  React.createElement("div", { className: "text-gray-600 break-all" }, shareUrl)
+                ),
+                React.createElement("button", { onClick: copyShareUrl, className: "px-6 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 whitespace-nowrap" }, "复制链接")
+              )
+            ),
+            excelData.length === 0 ? 
+              React.createElement("div", { className: "text-center py-20 text-gray-400" },
+                React.createElement("div", { className: "text-6xl mb-4" }, "📋"),
+                React.createElement("div", { className: "text-xl" }, "请点击上方「上传 Excel」按钮")
+              ) :
+              React.createElement("div", null,
+                React.createElement("div", { className: "bg-white rounded-2xl shadow-lg p-6" },
+                  React.createElement("div", { className: "flex items-center justify-between mb-4" },
+                    React.createElement("div", { className: "flex items-center gap-3" },
+                      React.createElement("span", { className: "text-2xl" }, "⭐"),
+                      React.createElement("h2", { className: "text-xl font-bold" }, "重点关注工单"),
+                      React.createElement("span", { className: "px-3 py-1 bg-orange-100 text-orange-600 rounded-full text-sm" }, searchedOrders.length + " 条")
+                    )
+                  ),
+                  React.createElement("div", { className: "mb-4" },
+                    React.createElement("input", { type: "text", className: "filter-input", placeholder: "搜索标题、工单号、创建人、工单对接人、关联人...", value: searchKeyword, onChange: e => setSearchKeyword(e.target.value) })
+                  ),
+                  React.createElement("p", { className: "text-sm text-gray-500 mb-4" }, "筛选条件：重大风险/紧急问题/疑似重大客户问题"),
+                  searchedOrders.length === 0 ? 
+                    React.createElement("div", { className: "text-center py-8 text-gray-400" }, "没有匹配的工单") :
+                    React.createElement("div", { className: "card-grid" },
+                      searchedOrders.map((order, i) => React.createElement(OrderCard, { key: i, order: order }))
+                    )
+                ),
+                React.createElement("div", { className: "bg-white rounded-2xl shadow-lg p-6" },
+                  React.createElement("div", { className: "flex items-center gap-3 mb-4" },
+                    React.createElement("span", { className: "text-2xl" }, "📊"),
+                    React.createElement("h2", { className: "text-xl font-bold" }, "所有工单汇总"),
+                    React.createElement("span", { className: "px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-sm" }, filteredExcelData.length + " 条")
+                  ),
+                  React.createElement("div", { className: "table-wrap border rounded-xl" },
+                    React.createElement("table", { className: "w-full bg-white text-sm" },
+                      React.createElement("thead", { className: "bg-gray-100 sticky top-0 z-10" },
+                        React.createElement("tr", null,
+                          allFields.map((field, i) => 
+                            React.createElement("th", { key: i, className: "border px-3 py-2 text-left whitespace-nowrap" },
+                              React.createElement("div", { className: "mb-1 font-medium text-xs" }, fieldLabels[field] || field),
+                              React.createElement("input", {
+                                type: "text",
+                                className: "filter-input text-xs",
+                                placeholder: "筛选",
+                                value: filterColumns[field] || "",
+                                onChange: e => setFilterColumns(prev => ({...prev, [field]: e.target.value}))
+                              })
+                            )
+                          )
+                        )
+                      ),
+                      React.createElement("tbody", null,
+                        filteredExcelData.map((order, i) => 
+                          React.createElement("tr", { key: i, className: "hover:bg-blue-50 cursor-pointer", onClick: () => setSelectedOrder(order) },
+                            allFields.map((field, j) => React.createElement("td", { key: j, className: "border px-3 py-2 whitespace-nowrap max-w-xs truncate" }, cleanField(order[field]) || "-"))
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+          ),
+          selectedOrder && 
+            React.createElement("div", { className: "fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50", onClick: () => setSelectedOrder(null) },
+              React.createElement("div", { className: "bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col", onClick: e => e.stopPropagation() },
+                React.createElement("div", { className: "flex items-center justify-between p-6 border-b" },
+                  React.createElement("h3", { className: "text-2xl font-bold" }, "工单详情"),
+                  React.createElement("button", { onClick: () => setSelectedOrder(null), className: "w-10 h-10 rounded-full hover:bg-gray-100" }, "✕")
+                ),
+                React.createElement("div", { className: "modal-body p-6" },
+                  React.createElement("div", { className: "space-y-4" },
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单总结"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["工单总结"] || "无")),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单内容"), React.createElement("div", { className: "bg-gray-50 p-3 rounded whitespace-pre-wrap" }, selectedOrder["工单内容"] || "无")),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单链接"), selectedOrder["工单链接"] ? React.createElement("a", { href: selectedOrder["工单链接"], target: "_blank", className: "text-blue-500 underline break-all" }, selectedOrder["工单链接"]) : React.createElement("span", { className: "text-gray-400" }, "无")),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-4" },
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "AI大分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["AI大分类"] || "无")),
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "AI小分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["AI小分类"] || "无"))
+                    ),
+                    React.createElement("div", { className: "grid grid-cols-2 gap-4" },
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "创建人"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["创建人"] || "无")),
+                      React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "工单对接人"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["工单对接人"] || "无"))
+                    ),
+                    React.createElement("div", null, React.createElement("label", { className: "text-sm text-gray-500" }, "客户分类"), React.createElement("div", { className: "bg-gray-50 p-3 rounded" }, selectedOrder["客户分类"] || "无"))
+                  ),
+                  React.createElement("div", { className: "flex gap-3 mt-6" },
+                    React.createElement("button", { onClick: () => setShowAISummary(!showAISummary), className: "flex-1 px-6 py-3 rounded-xl " + (showAISummary ? "bg-blue-500 text-white" : "bg-gray-100") }, showAISummary ? "隐藏" : "显示", " AI总结"),
+                    React.createElement("button", { onClick: copyTSV, className: "flex-1 px-6 py-3 rounded-xl bg-green-500 text-white" }, "一键复制")
+                  ),
+                  showAISummary && React.createElement("div", { className: "mt-4" },
+                    React.createElement("div", { className: "table-wrap border rounded" },
+                      React.createElement("table", { className: "w-full bg-white text-xs" },
+                        React.createElement("thead", { className: "bg-gray-100 sticky top-0" },
+                          React.createElement("tr", null,
+                            ["跟进日期","跟进人","跟进状态","跟进完成时间","问题场景分类","案例名称","案例跟踪分析与解决","问题类型","工单标签","工单内容","工单链接","工单号","工单一级类型","工单二级类型","工单星级","判责","客户名称","客户分类"].map((h, i) => React.createElement("th", { key: i, className: "border px-3 py-2" }, h))
+                          )
+                        ),
+                        React.createElement("tbody", null,
+                          React.createElement("tr", null,
+                            generateAISummary(selectedOrder).map((v, i) => React.createElement("td", { key: i, className: "border px-3 py-2" }, v))
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+            )
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>

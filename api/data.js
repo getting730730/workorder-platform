@@ -1,17 +1,7 @@
 import { list } from "@vercel/blob";
 
-export default async function handler(req) {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS"
-      }
-    });
-  }
-
-  const url = new URL(req.url);
+export async function GET(request) {
+  const url = new URL(request.url);
   const id = url.searchParams.get("id");
 
   if (!id) {
@@ -49,4 +39,14 @@ export default async function handler(req) {
       headers: { "Content-Type": "application/json" }
     });
   }
+}
+
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, OPTIONS"
+    }
+  });
 }

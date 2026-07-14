@@ -1,4 +1,4 @@
-﻿import { kv } from "@vercel/kv";
+import { list } from "@vercel/blob";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10,12 +10,16 @@ export default async function handler(req, res) {
   }
   
   try {
-    const data = await kv.get(id);
+    const blobName = "workorder-" + id + ".json";
+    const { blobs } = await list();
+    const target = blobs.find(b => b.pathname === blobName);
     
-    if (!data) {
+    if (!target) {
       return res.status(404).json({ error: "数据不存在或已过期" });
     }
     
+    const response = await fetch(target.url);
+    const data = await response.json();
     res.json(data);
   } catch (error) {
     console.error("读取错误:", error);
